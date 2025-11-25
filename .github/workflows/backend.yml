@@ -2,28 +2,80 @@ name: Deploy Backend
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
-    - name: Setup SSH Key
-      run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-        chmod 600 ~/.ssh/id_ed25519
-        ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+      # CLEAN deploy folder (remove metadata files)
+      - name: Prepare Clean Backend Package
+        run: |
+          mkdir deploy
+          shopt -s dotglob
+          cp -r * deploy || true
+          rm -rf deploy/.git
+          rm -rf deploy/.github
+          rm -rf deploy/*.md
+          rm -rf deploy/LICENSE
 
-    - name: Deploy Files to Server
-      run: |
-        ssh -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "rm -rf ~/crt-app/backend/*"
-        scp -i ~/.ssh/id_ed25519 -r ./* ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/crt-app/backend/
+      # UPLOAD backend clean package
+      - name: Upload Backend to Server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "deploy/*"
+          target: "/home/${{ secrets.SSH_USER }}/crt-app/backend/"
+          overwrite: true
 
-    - name: Restart Backend Service
-      run: |
-        ssh -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "sudo systemctl restart fastapi"
+      # RUN SERVER SIDE SETUP COMMANDS
+      - name: Configure and Restart Backend
+        uses: appleboy/ssh-action@v1.0.1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "📦 Updating server packages..."
+            sudo apt update -y
+            sudo apt install python3 python3-pip python3-venv -y
+
+            echo "🐍 Recreating virtual environment..."
+            rm -rf /home/${{ secrets.SSH_USER }}/crt-app/backend/venv
+            python3 -m venv /home/${{ secrets.SSH_USER }}/crt-app/backend/venv
+
+            echo "⬆️ Upgrading pip inside venv..."
+            /home/${{ secrets.SSH_USER }}/crt-app/backend/venv/bin/python3 -m pip install --upgrade pip
+
+            echo "📦 Installing dependencies..."
+            /home/${{ secrets.SSH_USER }}/crt-app/backend/venv/bin/pip install -r /home/${{ secrets.SSH_USER }}/crt-app/backend/requirements.txt
+
+            echo "⚙️ Configuring FastAPI Service..."
+            sudo tee /etc/systemd/system/fastapi.service > /dev/null <<EOF
+            [Unit]
+            Description=FastAPI Backend Service
+            After=network.target
+
+            [Service]
+            User=${{ secrets.SSH_USER }}
+            WorkingDirectory=/home/${{ secrets.SSH_USER }}/crt-app/backend
+            ExecStart=/home/${{ secrets.SSH_USER }}/crt-app/backend/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+            Restart=always
+            Environment=PYTHONUNBUFFERED=1
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            echo "🔄 Restarting FastAPI..."
+            sudo systemctl daemon-reload
+            sudo systemctl enable fastapi
+            sudo systemctl restart fastapi
+
+            echo "🚀 Deployment Completed Successfully!"
