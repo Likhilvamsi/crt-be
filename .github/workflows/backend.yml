@@ -1,37 +1,29 @@
-name: Deploy CRT Backend
+name: Deploy Backend
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Repo
-      uses: actions/checkout@v3
+    - name: Checkout Code
+      uses: actions/checkout@v4
 
-    - name: Setup SSH
+    - name: Setup SSH Key
       run: |
         mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
+        ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
-    - name: Copy backend files to server
+    - name: Deploy Files to Server
       run: |
-        ssh -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "rm -rf ~/crt-app/backend/*"
-        scp -i ~/.ssh/id_rsa -r ./* ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/crt-app/backend/
+        ssh -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "rm -rf ~/crt-app/backend/*"
+        scp -i ~/.ssh/id_ed25519 -r ./* ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/crt-app/backend/
 
-    - name: Install Dependencies & Restart API
+    - name: Restart Backend Service
       run: |
-        ssh -i ~/.ssh/id_rsa ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "
-        cd ~/crt-app/backend &&
-        if [ ! -d venv ]; then python3 -m venv venv; fi &&
-        source venv/bin/activate &&
-        pip install -r requirements.txt &&
-        sudo systemctl restart crt-backend &&
-        sudo systemctl status crt-backend --no-pager
-        "
+        ssh -i ~/.ssh/id_ed25519 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "sudo systemctl restart fastapi"
