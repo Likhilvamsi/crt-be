@@ -12,7 +12,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # CLEAN deploy folder (remove metadata files)
+      # CLEAN deploy folder (copy ALL files including .env)
       - name: Prepare Clean Backend Package
         run: |
           mkdir deploy
@@ -23,40 +23,41 @@ jobs:
           rm -rf deploy/*.md
           rm -rf deploy/LICENSE
 
-      # UPLOAD backend clean package
+      # ⬆️ Upload COMPLETE project (including .env)
       - name: Upload Backend to Server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "deploy/*"
+          source: "deploy/**"
           target: "/home/${{ secrets.SSH_USER }}/crt-app/backend/"
           overwrite: true
 
-      # RUN SERVER SIDE SETUP COMMANDS
-      - name: Configure and Restart Backend
+      # ⚙️ Server setup + restart service
+      - name: Configure Backend on Server
         uses: appleboy/ssh-action@v1.0.1
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "📦 Updating server packages..."
+            echo "📦 Updating system..."
             sudo apt update -y
             sudo apt install python3 python3-pip python3-venv -y
 
-            echo "🐍 Recreating virtual environment..."
+            echo "🐍 Setting up virtual environment..."
             rm -rf /home/${{ secrets.SSH_USER }}/crt-app/backend/venv
             python3 -m venv /home/${{ secrets.SSH_USER }}/crt-app/backend/venv
 
-            echo "⬆️ Upgrading pip inside venv..."
-            /home/${{ secrets.SSH_USER }}/crt-app/backend/venv/bin/python3 -m pip install --upgrade pip
-
-            echo "📦 Installing dependencies..."
+            echo "⬆️ Installing dependencies..."
+            /home/${{ secrets.SSH_USER }}/crt-app/backend/venv/bin/pip install --upgrade pip
             /home/${{ secrets.SSH_USER }}/crt-app/backend/venv/bin/pip install -r /home/${{ secrets.SSH_USER }}/crt-app/backend/requirements.txt
 
-            echo "⚙️ Configuring FastAPI Service..."
+            echo "🔐 Fixing .env permissions..."
+            chmod 600 /home/${{ secrets.SSH_USER }}/crt-app/backend/.env
+
+            echo "⚙️ Creating FastAPI Service..."
             sudo tee /etc/systemd/system/fastapi.service > /dev/null <<EOF
             [Unit]
             Description=FastAPI Backend Service
@@ -65,6 +66,7 @@ jobs:
             [Service]
             User=${{ secrets.SSH_USER }}
             WorkingDirectory=/home/${{ secrets.SSH_USER }}/crt-app/backend
+            EnvironmentFile=/home/${{ secrets.SSH_USER }}/crt-app/backend/.env
             ExecStart=/home/${{ secrets.SSH_USER }}/crt-app/backend/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
             Restart=always
             Environment=PYTHONUNBUFFERED=1
@@ -73,9 +75,9 @@ jobs:
             WantedBy=multi-user.target
             EOF
 
-            echo "🔄 Restarting FastAPI..."
+            echo "🚀 Restarting FastAPI..."
             sudo systemctl daemon-reload
             sudo systemctl enable fastapi
             sudo systemctl restart fastapi
 
-            echo "🚀 Deployment Completed Successfully!"
+            echo "🎉 Backend Deployment Successful!"
